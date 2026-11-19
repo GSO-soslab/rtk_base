@@ -3,7 +3,7 @@
 Data flow
 ---------
    SerialLink thread --bytes--> StreamFramer --+-- NMEA --> FixProcessor --> ~/fix
-                                               |        +-> ~/nmea (raw sentences)
+                                               |        +-> ~/nmea (raw sentences), gpsd UDP
                                                +-- RTCM frames --> RtcmRouter --> sinks (UDP/TCP/serial)
 
 With `configure_receiver` the receiver class turns the base settings into
@@ -11,6 +11,7 @@ module commands on every (re)connect.  See README for the parameters.
 """
 import logging
 import signal
+import socket
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
@@ -56,6 +57,14 @@ class RtkBase(Node):
                                on_connect=self._on_receiver_connected,
                                reconnect_s=self.p('serial_reconnect_s'))
 
+        # NMEA to gpsd, so chrony can set the clock from GNSS time (gpsd cannot
+        # open the receiver port itself while this node holds it)
+        self.udp_socket = None
+        if self.p('use_gpsd_udp'):
+            self.server_address = (self.p('gpsd_udp_host'), self.p('virtual_port'))
+            self.gpsd_patterns = tuple(_non_empty(self.p('gpsd_udp_patterns')))
+            self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
         self.create_subscription(String, self.p('tx_cmd_topic'), self._on_tx_cmd, 10)
         self.create_service(Trigger, '~/configure_receiver', self._on_configure_request)
 
@@ -90,6 +99,11 @@ class RtkBase(Node):
             d(f'epe_quality{q}', v)
         d('fix_covariance_mode', 'hdop_scaled')
         d('strict_validation', False)
+        # --- gpsd (same names and defaults as unicore_rtk_driver)
+        d('use_gpsd_udp', False)
+        d('virtual_port', 5005)
+        d('gpsd_udp_host', '127.0.0.1')
+        d('gpsd_udp_patterns', ['$GN'])  # lines containing any of these go to gpsd
         # --- receiver
         d('receiver', 'unicore')
         d('receiver_port', '')
@@ -200,6 +214,8 @@ class RtkBase(Node):
                                             throttle_duration_sec=5.0)
 
     def _publish_sentence(self, data: str, stamp):
+        if self.udp_socket is not None and any(p in data for p in self.gpsd_patterns):
+            self.udp_socket.sendto(data.encode(), self.server_address)
         if self.nmea_pub.get_subscription_count() > 0:
             msg = Sentence()
             msg.header.stamp = stamp
@@ -263,6 +279,8 @@ class RtkBase(Node):
     def close(self):
         self.link.stop()
         self.router.stop()
+        if self.udp_socket is not None:
+            self.udp_socket.close()
 
 
 def main(args=None):
