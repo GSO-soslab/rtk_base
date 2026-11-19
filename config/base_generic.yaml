@@ -12,6 +12,14 @@
     baudrate: 115200
     gps_frame_id: rtk_base
 
+    # Stamp ~/fix with GNSS time instead of arrival time
+    # use_gnss_time: true
+
+    # NMEA to gpsd for the computer clock (README, Time from GNSS); same port as
+    # DEVICES="udp://127.0.0.1:<port>" in /etc/default/gpsd
+    # use_gpsd_udp: true
+    # virtual_port: 5005
+
     receiver: generic
 
     rtcm:
