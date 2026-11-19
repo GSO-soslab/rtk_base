@@ -1,0 +1,13 @@
+# /etc/default/gpsd on the base station computer.
+#
+# rtk_base_node forwards the receiver's NMEA to gpsd over UDP; set in the node's
+# parameter file:
+#   use_gpsd_udp: true
+#   virtual_port: <port>        # same port as in DEVICES below
+# gpsd must not open the receiver serial port itself, hence USBAUTO="false".
+# Apply with: sudo systemctl restart gpsd
+START_DAEMON="true"
+USBAUTO="false"
+DEVICES="udp://127.0.0.1:<port>"
+# -n: read the receiver without waiting for a client, so chrony gets time
+GPSD_OPTIONS="-n"

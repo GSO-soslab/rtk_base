@@ -12,7 +12,8 @@ outputs, and publishes the position and the raw NMEA so they can be recorded wit
 - Rovers read the corrections with `unicore_rtk_driver` (`rtcm.inputs`). The two packages share
   only the RTCM 3 stream.
 - The receiver's NMEA can be forwarded to gpsd over UDP (`use_gpsd_udp`), so the base station
-  computer sets its clock from GNSS time with chrony and can serve it to the network over NTP.
+  computer sets its clock from GNSS time with chrony and can serve it to the network over NTP
+  (see Base station computer setup).
 
 A base computer without ROS can run the relay (`rtk_base_relay`, see RTCM relay without ROS).
 
@@ -29,8 +30,9 @@ A base computer without ROS can run the relay (`rtk_base_relay`, see RTCM relay 
 - `rtk_base/rtcm/`: RTCM output transports (`transport.py`), routing and statistics (`router.py`),
   RTCM 3 helpers (`rtcm3.py`).
 - `rtk_base/tools/relay.py`: RTCM relay for a base station computer without ROS.
-- `config/`: example parameter files. `launch/`: launch file. `udev/`, `scripts/`: stable device
-  names. `systemd/`: relay service.
+- `config/`: example parameter files, relay arguments, and gpsd and chrony examples for the base
+  station computer. `launch/`: launch file. `udev/`, `scripts/`: stable device names. `systemd/`:
+  node and relay services.
 
 ## Installation
 ```bash
@@ -197,6 +199,57 @@ and paths in the file before installing it. In a ROS workspace the same tool is 
 | `--serial-reconnect-s` | `1.0` | Wait between attempts to open the serial port |
 | `--no-rtcm-warning-s` | `10` | Warn when no RTCM arrives for this long |
 | `--log-level` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
+
+## Base station computer setup
+Ubuntu Server 24.04 with ROS 2 Jazzy, for example a Raspberry Pi in the station. The receiver
+antenna is outside; only the coaxial cable enters the station. Site specific values (addresses,
+user, domain ID, base coordinates) are kept in the station log book.
+
+### Start at boot
+`systemd/rtk_base.service` runs `ros2 launch rtk_base start.launch.py` at boot and restarts it if it
+stops. Copy the parameter file out of the workspace first, for example
+`config/base_generic.yaml` to `~/rtk_base/base.yaml`, and use the receiver's
+`/dev/serial/by-id/` name as `device`. Edit the user, `ROS_DOMAIN_ID`, the namespace and the
+paths in the service file, then:
+```bash
+sudo cp systemd/rtk_base.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rtk_base
+journalctl -u rtk_base -f
+```
+Use either this service or the relay service, not both: only one program can read the receiver
+port.
+
+### Time from GNSS
+The node forwards the receiver's NMEA to gpsd over UDP; chrony takes the time from gpsd and serves
+it to the vehicles over NTP. This works without internet.
+```bash
+sudo apt install --no-install-recommends gpsd gpsd-tools chrony
+```
+1. gpsd: copy `config/gpsd.example` to `/etc/default/gpsd` and set the UDP port.
+   `USBAUTO="false"` stops gpsd from opening the receiver port itself.
+2. Node parameters: `use_gpsd_udp: true` and `virtual_port` set to the same port.
+3. chrony: copy `config/chrony-rtk_base.conf.example` to `/etc/chrony/conf.d/rtk_base.conf` and set
+   the network that may query the time (`allow`).
+4. `sudo systemctl restart gpsd chrony`, then check:
+```bash
+gpsmon                   # gpsd receives the NMEA and has a fix
+chronyc sources -v       # GPS line: '*' = the source chrony follows, reach 377 = all recent samples
+chronyc tracking         # Reference ID GPS when GNSS time is in use
+```
+`*` on the GPS line means the computer follows GNSS time. With internet access chrony also lists
+the internet servers and may follow one of them instead.
+
+NMEA time arrives a fixed time after the second it describes, and without the receiver's PPS
+signal it is accurate to some tens of milliseconds. That is enough to align logs and recordings
+between vehicles. To measure the delay, run with internet servers available and compare the GPS
+offset with theirs (`chronyc sourcestats`), then set `offset` on the `refclock` line so that GPS
+agrees with them. Record the value in the station log book.
+
+Vehicles use the base station computer as their time server, in their own chrony configuration:
+```
+server <base_ip> iburst
+```
 
 ## Node: rtk_base_node
 

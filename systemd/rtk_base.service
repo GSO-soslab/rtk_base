@@ -1,0 +1,31 @@
+# Starts rtk_base_node at boot on the base station computer.
+#
+# Install (edit User, ROS_DOMAIN_ID and the paths first):
+#   sudo cp systemd/rtk_base.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rtk_base
+# Logs:
+#   journalctl -u rtk_base -f
+# The user must be in the dialout group. The parameter file is a copy of
+# config/base_generic.yaml or config/base_um982.yaml kept outside the workspace.
+
+[Unit]
+Description=RTK base station node (rtk_base)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=CHANGE_ME_USER
+Environment=ROS_DOMAIN_ID=0
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && \
+    source /home/CHANGE_ME_USER/ros2_ws/install/setup.bash && \
+    exec ros2 launch rtk_base start.launch.py namespace:=base node_name:=rtk_base \
+    params_file:=/home/CHANGE_ME_USER/rtk_base/base.yaml'
+# ros2 launch stops its nodes on SIGINT
+KillSignal=SIGINT
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

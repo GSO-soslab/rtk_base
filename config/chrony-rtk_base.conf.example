@@ -1,0 +1,16 @@
+# /etc/chrony/conf.d/rtk_base.conf on the base station computer.
+#
+# Time from the GNSS receiver through gpsd (shared memory segment 0), served to
+# the vehicles on the station network. NMEA time is received a fixed time after
+# the second it describes; measure it on site and set `offset` (README, Base
+# station computer setup). Apply with: sudo systemctl restart chrony
+refclock SHM 0 refid GPS offset 0.0
+
+# Serve time to the station network
+allow <vehicle_subnet>
+
+# Keep serving time when no other source is reachable
+local stratum 10
+
+# Step the clock in the first updates if it is more than 1 s off
+makestep 1.0 3
