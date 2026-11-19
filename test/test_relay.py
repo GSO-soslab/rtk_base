@@ -49,7 +49,8 @@ def test_argument_file_comments_and_multi_value_options(tmp_path):
 def test_shipped_example_file_parses():
     example = os.path.join(os.path.dirname(__file__), '..', 'config', 'relay.conf.example')
     args = relay.parse_args([f'@{example}'])
-    assert args.device == '/dev/ttyACM0' and args.output == ['tcpserver://0.0.0.0:2101']
+    assert args.device.startswith('/dev/serial/by-id/usb-u-blox')
+    assert args.output == ['tcpserver://0.0.0.0:2101']
 
 
 class ListHandler(logging.Handler):

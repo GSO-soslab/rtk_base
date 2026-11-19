@@ -1,6 +1,6 @@
 # Arguments for rtk_base_relay (python3 -m rtk_base.tools.relay @FILE), one
 # option per line; lines starting with # are skipped.
---device=/dev/ttyACM0
+--device=/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00
 --baud=115200
 --output=tcpserver://0.0.0.0:2101
 # UDP broadcast on the local network, use the broadcast address of that network

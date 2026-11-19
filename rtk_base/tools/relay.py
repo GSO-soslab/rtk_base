@@ -2,7 +2,7 @@
 without ROS.
 
     python3 -m rtk_base.tools.relay --device /dev/ttyACM0 --baud 115200 \\
-        --output tcpserver://0.0.0.0:2101 --output udp://192.168.1.255:2101
+        --output tcpserver://0.0.0.0:2101 --output udp://<broadcast_address>:2101
 
     python3 -m rtk_base.tools.relay @/home/user/rtk/relay.conf
 

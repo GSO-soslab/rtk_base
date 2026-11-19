@@ -5,7 +5,10 @@
 # RTK Surveyor as base" in the README.
 /**:
   ros__parameters:
-    device: /dev/ttyACM0
+    # Stable name of the Surveyor's Configure u-blox USB port: /dev/ttyACM0 can be
+    # another device after a reboot. The name has no serial number, so it fits one
+    # u-blox receiver per computer. Data port on a UART: for example /dev/ttyAMA0.
+    device: /dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00
     baudrate: 115200
     gps_frame_id: rtk_base
 

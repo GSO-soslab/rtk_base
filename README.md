@@ -84,6 +84,20 @@ that were configured by hand unchanged. The `generic` receiver type never genera
 `~/configure_receiver` (`std_srvs/Trigger`) sends the configuration from the current parameters on
 demand.
 
+### Base position accuracy
+Rover RTK positions are relative to the base position the base sends in RTCM 1005/1006. An error
+in that position shifts every rover position by the same amount. When a rover loses the
+corrections and falls back to DGPS or single, the shift is lost and its position can jump by up
+to the base position error.
+
+- Survey-in averages the receiver's own position for the set time. The result is typically off
+  by one to a few meters and differs between surveys, so rover positions from different days can
+  differ by that much. Use a long survey and a tight accuracy threshold.
+- For positions that agree between days, survey once, then enter that position as a fixed base
+  position (`base.use_fixed_position` for a UM982, Fixed base type in the Surveyor menu). A
+  surveyed reference point gives an absolute position. Record the coordinates in the station log
+  book.
+
 ## RTCM outputs
 RTCM frames read from the receiver are written to every entry of `rtcm.outputs`. The base station
 position from RTCM 1005/1006 is logged and reported in `/diagnostics`.
@@ -95,7 +109,7 @@ position from RTCM 1005/1006 is logged and reported in `/diagnostics`.
 | `tcp://HOST:PORT` | Connect to a relay or rover. Reconnects automatically. |
 | `serial:///dev/ttyX?baud=57600` | Radio modem. |
 
-Endpoint options are given as a query string, for example `tcp://192.168.1.10:2101?reconnect_s=0.5`.
+Endpoint options are given as a query string, for example `tcp://<relay_ip>:2101?reconnect_s=0.5`.
 
 | Option | Default | Applies to | Description |
 |---|---|---|---|
@@ -118,7 +132,8 @@ Setup:
 1. Base type: open the menu on the Configure ESP32 port (any key), Configure Base, and select
    Survey-In. A fixed base with wrong coordinates (for example 0, 0, 0) has no fix in base mode and
    outputs no RTCM 1005. With Survey-In the Surveyor waits for a horizontal accuracy threshold
-   (1 m in current firmware), then surveys until the minimum time and mean accuracy are met.
+   (1 m in current firmware), then surveys until the minimum time and mean accuracy are met. The
+   mean accuracy threshold sets how far the base position may be off, see Base position accuracy.
 2. RTCM on the Data port: with Surveyor firmware v1.1 the receiver had RTCM output disabled on
    UART1 (`CFG-UART1OUTPROT-RTCM3X = 0`). Enable it through the Configure u-blox port with
    `ubxtool` (package `gpsd-clients`). The setting is stored in the receiver flash; it was kept
@@ -137,8 +152,9 @@ Setup:
    message types (1005, 1074, 1084, 1124 and 1230 are expected) and the base position decoded from
    RTCM 1005.
 
-Base RTCM output was verified with firmware v1.1. With firmware v4.4 the message configuration
-above was verified; RTCM output in base mode has not been tested yet.
+Base RTCM output was verified with firmware v1.1 and v4.4. With v4.4 the receiver was read on the
+Configure u-blox USB port of the base station computer: about 400 B/s with RTCM 1005, 1074, 1084,
+1124 and 1230.
 
 Firmware updates use the Configure ESP32 port, see the SparkFun RTK firmware documentation. Units
 sold before September 2021 have 4 MB flash and can only be updated over USB (GUI or `esptool`).
@@ -160,14 +176,15 @@ connect (same commands as the node, without the logs).
 ```bash
 git clone https://github.com/GSO-soslab/rtk_base.git
 cd rtk_base
-python3 -m rtk_base.tools.relay --device /dev/ttyACM0 --baud 115200 \
-    --output tcpserver://0.0.0.0:2101 --output udp://192.168.1.255:2101
+python3 -m rtk_base.tools.relay \
+    --device /dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00 \
+    --output tcpserver://0.0.0.0:2101 --output udp://<broadcast_address>:2101
 
 # UM982: survey-in for 300 s, or a fixed position, and the RTCM messages to enable
 python3 -m rtk_base.tools.relay --device /dev/ttyUSB0 --receiver unicore --survey-s 300 \
     --rtcm-message 1006:10 --rtcm-message 1074:1 --output tcpserver://0.0.0.0:2101
 python3 -m rtk_base.tools.relay --device /dev/ttyUSB0 --receiver unicore \
-    --fixed-position 41.49126464 -71.42186016 -14.11 --output tcpserver://0.0.0.0:2101
+    --fixed-position <lat> <lon> <height> --output tcpserver://0.0.0.0:2101
 ```
 
 Arguments can be kept in a file, one option per line (see `config/relay.conf.example`). Lines
@@ -331,7 +348,6 @@ repository root (needs `pytest` and `pyserial`); `test/test_fix.py` needs the RO
 The following have not been verified on hardware yet:
 - UM982 base commands: `MODE BASE TIME`, `MODE BASE <lat> <lon> <height>` (height reference to be
   confirmed for the firmware in use) and `RTCM<number> [port] <period>`.
-- SparkFun RTK Surveyor RTCM output in base mode with firmware v4.4.
 
 ## Acknowledgment
 `rtk_base/protocol/nmea_parser.py` is derived from
