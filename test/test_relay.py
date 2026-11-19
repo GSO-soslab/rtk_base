@@ -1,3 +1,4 @@
+"""Tests for the RTCM relay without ROS: arguments, forwarding, status and receiver setup."""
 import logging
 import os
 import pty
@@ -32,6 +33,23 @@ def test_arguments_from_file(tmp_path):
     args = relay.parse_args([f'@{conf}'])
     assert (args.device, args.baud) == ('/dev/ttyACM0', 57600)
     assert args.output == ['tcpserver://0.0.0.0:2101', 'udp://192.168.1.255:2101']
+
+
+def test_argument_file_comments_and_multi_value_options(tmp_path):
+    conf = tmp_path / 'relay.conf'
+    conf.write_text('# base station\n\n--device=/dev/ttyACM0\n--output=tcpserver://0.0.0.0:2101\n'
+                    '#--output=udp://192.168.1.255:2101\n--receiver=unicore\n'
+                    '--mode-command=MODE BASE TIME 60\n--fixed-position 41.5 -71.4 10\n')
+    args = relay.parse_args([f'@{conf}'])
+    assert args.output == ['tcpserver://0.0.0.0:2101']
+    assert args.mode_command == 'MODE BASE TIME 60'
+    assert args.fixed_position == [41.5, -71.4, 10.0]
+
+
+def test_shipped_example_file_parses():
+    example = os.path.join(os.path.dirname(__file__), '..', 'config', 'relay.conf.example')
+    args = relay.parse_args([f'@{example}'])
+    assert args.device == '/dev/ttyACM0' and args.output == ['tcpserver://0.0.0.0:2101']
 
 
 class ListHandler(logging.Handler):

@@ -16,12 +16,14 @@ UM98x base commands after every (re)connect: survey-in (`--survey-s`) or a fixed
 position (`--fixed-position LAT LON ALT`), and one RTCM<n> command per
 `--rtcm-message`.
 
-Arguments can be read from a file with @FILE, one argument per line, e.g.:
+Arguments can be read from a file with @FILE, one option per line.  Lines
+starting with # and blank lines are skipped.  `--name=value` keeps the whole
+value (spaces included); `--name v1 v2 v3` gives several values, e.g.:
 
     --device=/dev/ttyACM0
     --baud=115200
     --output=tcpserver://0.0.0.0:2101
-    --output=udp://192.168.1.255:2101
+    # --fixed-position LAT LON HEIGHT
 
 Runs with Python 3 and pyserial (Debian/Ubuntu: python3-serial); ROS is
 optional.
@@ -145,8 +147,23 @@ class Relay:
                           'RTCM output enabled on this port?', throttle_duration_sec=30.0)
 
 
+class _ArgumentFileParser(argparse.ArgumentParser):
+    """Read @FILE lines: skip blank lines and # comments, keep `--name=value` whole.
+
+    Any other line is split on whitespace, for example `--fixed-position LAT LON H`.
+    """
+
+    def convert_arg_line_to_args(self, arg_line):
+        line = arg_line.strip()
+        if not line or line.startswith('#'):
+            return []
+        if line.startswith('-') and '=' in line.split()[0]:
+            return [line]
+        return line.split()
+
+
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentFileParser(
         prog='rtk_base_relay', fromfile_prefix_chars='@',
         description='Forward RTCM from a base receiver to UDP / TCP / serial outputs, without ROS.')
     parser.add_argument('--device', required=True, help='receiver serial device')
