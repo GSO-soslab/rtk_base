@@ -12,4 +12,5 @@
     receiver: generic
 
     rtcm:
-      outputs: ['tcpserver://0.0.0.0:2101', 'udp://192.168.1.255:2101']
+      # add 'udp://<broadcast address>:2101' to also broadcast on the local network
+      outputs: ['tcpserver://0.0.0.0:2101']
