@@ -1,3 +1,4 @@
+"""Tests for the RTCM 3 helpers, the router and the output transports."""
 import socket
 import time
 

@@ -1,3 +1,4 @@
+"""Tests for the checksums (NMEA, Unicore CRC-32, RTCM CRC-24Q) and the stream framer."""
 import json
 import os
 

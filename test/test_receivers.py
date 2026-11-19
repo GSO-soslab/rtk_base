@@ -1,3 +1,4 @@
+"""Tests for the base station commands generated for each receiver type."""
 import pytest
 
 from rtk_base.receivers import (BaseStationSettings, LogRequest, RtcmMessage, build_commands,

@@ -11,6 +11,8 @@ outputs, and publishes the position and the raw NMEA so they can be recorded wit
   `receiver: generic`.
 - Rovers read the corrections with `unicore_rtk_driver` (`rtcm.inputs`). The two packages share
   only the RTCM 3 stream.
+- The receiver's NMEA can be forwarded to gpsd over UDP (`use_gpsd_udp`), so the base station
+  computer sets its clock from GNSS time with chrony and can serve it to the network over NTP.
 
 A base computer without ROS can run the relay (`rtk_base_relay`, see RTCM relay without ROS).
 
@@ -166,7 +168,9 @@ python3 -m rtk_base.tools.relay --device /dev/ttyUSB0 --receiver unicore \
     --fixed-position 41.49126464 -71.42186016 -14.11 --output tcpserver://0.0.0.0:2101
 ```
 
-Arguments can be kept in a file, one per line (see `config/relay.conf.example`):
+Arguments can be kept in a file, one option per line (see `config/relay.conf.example`). Lines
+starting with `#` and blank lines are skipped. `--name=value` keeps the whole value, spaces
+included; `--name v1 v2 v3` gives several values, for example `--fixed-position LAT LON ALT`.
 ```bash
 python3 -m rtk_base.tools.relay @$HOME/rtk/relay.conf
 ```
@@ -231,6 +235,10 @@ compared.
 | `fix_covariance_mode` | `hdop_scaled` | `hdop_scaled`: variance = (HDOP x GST std)^2, height uses 2 x HDOP. `gst`: variance = GST std^2. |
 | `strict_validation` | `false` | Publish `fix` only after a new valid GGA |
 | `epe_quality0` ... `epe_quality9` | | Default position error per GGA fix quality, kept for compatibility |
+| `use_gpsd_udp` | `false` | Forward NMEA lines to gpsd over UDP |
+| `gpsd_udp_host` | `127.0.0.1` | gpsd address |
+| `virtual_port` | `5005` | gpsd UDP port (gpsd: `DEVICES="udp://127.0.0.1:<port>"`) |
+| `gpsd_udp_patterns` | `['$GN']` | Lines containing any of these strings are forwarded to gpsd |
 | `receiver` | `unicore` | `unicore` or `generic` |
 | `receiver_port` | `''` | Receiver port named in output commands, for example `COM1`. Empty uses the port the command is received on. |
 | `configure_receiver` | `false` | Send the receiver configuration each time the port is opened |
@@ -251,6 +259,12 @@ compared.
 | `debug` | `false` | Log every sentence at debug level |
 
 Topic name parameters: `fix_topic`, `nmea_topic`, `tx_cmd_topic`.
+
+## Shared code
+These modules are copies of the same files in `unicore_rtk_driver`, so that each package can be
+installed and maintained on its own: `protocol/checksums.py`, `protocol/framer.py`,
+`protocol/nmea_parser.py`, `serial_link.py` and `rtcm/rtcm3.py`. `fix_processor.py` is derived
+from `processor.py` there. A fix in one of these files belongs in both packages.
 
 ## Testing
 ```bash
