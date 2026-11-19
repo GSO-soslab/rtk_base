@@ -1,0 +1,23 @@
+# RTCM relay for a base station computer without ROS.
+#
+# Install (edit User and the two paths first):
+#   sudo cp systemd/rtk_base_relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rtk_base_relay
+# Logs:
+#   journalctl -u rtk_base_relay -f
+
+[Unit]
+Description=RTCM relay (rtk_base)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=CHANGE_ME_USER
+WorkingDirectory=/home/CHANGE_ME_USER/rtk_base
+ExecStart=/usr/bin/python3 -m rtk_base.tools.relay @/home/CHANGE_ME_USER/rtk/relay.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

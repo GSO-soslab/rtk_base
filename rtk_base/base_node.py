@@ -1,0 +1,289 @@
+"""ROS 2 node for an RTK base station receiver.
+
+Data flow
+---------
+   SerialLink thread --bytes--> StreamFramer --+-- NMEA --> FixProcessor --> ~/fix
+                                               |        +-> ~/nmea (raw sentences)
+                                               +-- RTCM frames --> RtcmRouter --> sinks (UDP/TCP/serial)
+
+With `configure_receiver` the receiver class turns the base settings into
+module commands on every (re)connect.  See README for the parameters.
+"""
+import logging
+import signal
+
+import rclpy
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from nmea_msgs.msg import Sentence
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from sensor_msgs.msg import NavSatFix, NavSatStatus
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
+
+from rtk_base.fix_processor import GGA_SOLUTION_NAMES, Config, FixProcessor
+from rtk_base.protocol.framer import FrameType, StreamFramer
+from rtk_base.receivers import (BaseStationSettings, build_commands, create_receiver,
+                                parse_log_list, parse_rtcm_message_list)
+from rtk_base.receivers.base import DEFAULT_RTCM_MESSAGES
+from rtk_base.receivers.unicore import DEFAULT_LOGS
+from rtk_base.rtcm.router import RtcmRouter
+from rtk_base.rtcm.transport import create_sink
+from rtk_base.serial_link import SerialLink
+
+
+def _non_empty(values):
+    return [v for v in values if v and v.strip()]
+
+
+class RtkBase(Node):
+
+    def __init__(self):
+        super().__init__('rtk_base')
+        self._declare_parameters()
+        self._setup_logging()
+
+        self.fix_pub = self.create_publisher(NavSatFix, self.p('fix_topic'), 10)
+        self.nmea_pub = self.create_publisher(Sentence, self.p('nmea_topic'), 10)
+
+        self.framer = StreamFramer()
+        self.processor = FixProcessor(self._processor_config(), self._publish, self.get_logger())
+        self.router = RtcmRouter(self.get_logger())
+        self.receiver = create_receiver(self.p('receiver'), self.p('receiver_port'))
+
+        self.link = SerialLink(self.p('device'), self.p('baudrate'), self.get_logger(),
+                               on_data=self._on_serial_data,
+                               on_connect=self._on_receiver_connected,
+                               reconnect_s=self.p('serial_reconnect_s'))
+
+        self.create_subscription(String, self.p('tx_cmd_topic'), self._on_tx_cmd, 10)
+        self.create_service(Trigger, '~/configure_receiver', self._on_configure_request)
+
+        for uri in _non_empty(self.p('rtcm.outputs')):
+            self.router.add_sink(create_sink(uri, self.get_logger()))
+        if not self.router.sinks:
+            self.get_logger().warn('No rtcm.outputs: corrections are not sent anywhere')
+
+        self.diag_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
+        self.create_timer(self.p('diagnostics_period'), self._publish_diagnostics)
+
+        self.router.start()
+        self.link.start()
+        self.get_logger().info(
+            f'RTK base - receiver={self.receiver.name}, device={self.p("device")}, '
+            f'RTCM out={len(self.router.sinks)}')
+
+    # ================================================================ params
+    def _declare_parameters(self):
+        d = self.declare_parameter
+        # --- serial port and topics
+        d('device', '/dev/ttyUSB0')
+        d('baudrate', 115200)
+        d('serial_reconnect_s', 1.0)
+        d('debug', False)
+        d('fix_topic', '~/fix')
+        d('nmea_topic', '~/nmea')
+        d('tx_cmd_topic', '~/tx_cmd')
+        d('gps_frame_id', 'rtk_base')
+        d('use_gnss_time', False)
+        for q, v in ((0, 1000000.0), (1, 4.0), (2, 0.1), (4, 0.02), (5, 4.0), (9, 3.0)):
+            d(f'epe_quality{q}', v)
+        d('fix_covariance_mode', 'hdop_scaled')
+        d('strict_validation', False)
+        # --- receiver
+        d('receiver', 'unicore')
+        d('receiver_port', '')
+        d('configure_receiver', False)
+        d('save_receiver_config', False)
+        d('receiver_logs', [f'{m.name}:{m.period_s:g}' for m in DEFAULT_LOGS])
+        d('receiver_commands', [''])
+        d('save_config_after_tx_cmd', True)
+        # --- base station
+        d('base.mode_command', '')
+        d('base.survey_in_min_duration_s', 120)
+        d('base.use_fixed_position', False)
+        d('base.fixed_latitude_deg', 0.0)
+        d('base.fixed_longitude_deg', 0.0)
+        d('base.fixed_altitude_m', 0.0)
+        d('base.rtcm_messages', [f'{m.number}:{m.period_s:g}' for m in DEFAULT_RTCM_MESSAGES])
+        # --- RTCM output
+        d('rtcm.outputs', [''])
+        d('rtcm.correction_timeout_s', 5.0)
+        d('diagnostics_period', 1.0)
+
+    def p(self, name):
+        return self.get_parameter(name).value
+
+    def _processor_config(self) -> Config:
+        cfg = Config()
+        for name in ('gps_frame_id', 'use_gnss_time', 'fix_covariance_mode', 'strict_validation',
+                     'epe_quality0', 'epe_quality1', 'epe_quality2', 'epe_quality4',
+                     'epe_quality5', 'epe_quality9'):
+            setattr(cfg, name, self.p(name))
+        return cfg
+
+    def _base_settings(self) -> BaseStationSettings:
+        return BaseStationSettings(
+            mode_command=self.p('base.mode_command').strip(),
+            survey_in_min_duration_s=self.p('base.survey_in_min_duration_s'),
+            use_fixed_position=self.p('base.use_fixed_position'),
+            fixed_latitude_deg=self.p('base.fixed_latitude_deg'),
+            fixed_longitude_deg=self.p('base.fixed_longitude_deg'),
+            fixed_altitude_m=self.p('base.fixed_altitude_m'),
+            rtcm_messages=parse_rtcm_message_list(self.p('base.rtcm_messages')))
+
+    def _setup_logging(self):
+        # the parsers log through Python logging ('rosout')
+        level = logging.DEBUG if self.p('debug') else logging.INFO
+        logging.getLogger('rosout').setLevel(level)
+        if self.p('debug'):
+            self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
+
+    def _publish(self, name, msg):
+        if name == 'fix':
+            self.fix_pub.publish(msg)
+
+    # ============================================================== receiver
+    def _configuration_commands(self, configure: bool):
+        base = self._base_settings()
+        cmds = build_commands(self.receiver, base, parse_log_list(self.p('receiver_logs')),
+                              _non_empty(self.p('receiver_commands')), configure=configure,
+                              save=self.p('save_receiver_config'))
+        if configure and cmds:
+            self.get_logger().info('Configuring base station: ' +
+                                   ' '.join(self.receiver.describe_base(base)))
+        return cmds
+
+    def _send_commands(self, cmds):
+        for cmd in cmds:
+            self.get_logger().info(f'Sending: {cmd}')
+            if not self.link.write_line(cmd):
+                return False
+        return True
+
+    def _on_receiver_connected(self):
+        """Runs on the serial thread after each (re)connect."""
+        self._send_commands(self._configuration_commands(self.p('configure_receiver')))
+
+    def _on_configure_request(self, request, response):
+        """~/configure_receiver: (re)send the configuration from the current
+        parameters.  Works whatever `configure_receiver` is set to."""
+        try:
+            cmds = self._configuration_commands(True)
+        except ValueError as e:
+            response.success, response.message = False, f'invalid parameters: {e}'
+            return response
+        if not self.link.is_open:
+            response.success, response.message = False, 'receiver not connected'
+            return response
+        response.success = self._send_commands(cmds)
+        response.message = '; '.join(cmds) if response.success else 'serial write failed'
+        return response
+
+    def _on_serial_data(self, data: bytes):
+        """Runs on the serial thread for every chunk read."""
+        stamp = self.get_clock().now().to_msg()
+        for frame in self.framer.feed(data):
+            if frame.type is FrameType.RTCM:
+                self.router.publish(frame.data)
+                continue
+            line = frame.text
+            self._publish_sentence(line + '\r\n', stamp)
+            if self.receiver.is_command_response(line):
+                self.get_logger().info(f'Receiver replied: {line}')
+                continue
+            if frame.type is FrameType.NMEA:
+                try:
+                    self.processor.handle_nmea(line, stamp)
+                except Exception as e:  # a bad line must not take the node down
+                    self.get_logger().error(f'Failed on {line!r}: {e}',
+                                            throttle_duration_sec=5.0)
+
+    def _publish_sentence(self, data: str, stamp):
+        if self.nmea_pub.get_subscription_count() > 0:
+            msg = Sentence()
+            msg.header.stamp = stamp
+            msg.header.frame_id = self.p('gps_frame_id')
+            msg.sentence = data
+            self.nmea_pub.publish(msg)
+
+    def _on_tx_cmd(self, msg: String):
+        """Send a raw command to the receiver, e.g. 'MODE BASE TIME 300'.
+
+            ros2 topic pub /<ns>/rtk_base/tx_cmd std_msgs/msg/String "data: 'RTCM1006 10'" --once
+        """
+        self.get_logger().info(f'Received command: {msg.data}')
+        self.link.write_line(msg.data)
+        save = self.receiver.save_configuration_command()
+        if self.p('save_config_after_tx_cmd') and save:
+            self.link.write_line(save)
+
+    # =========================================================== diagnostics
+    def _publish_diagnostics(self):
+        out = self.router.outgoing
+        timeout = self.p('rtcm.correction_timeout_s')
+        out.roll()
+        st = DiagnosticStatus()
+        st.name = f'{self.get_fully_qualified_name()}: RTK base'
+        st.hardware_id = f'{self.receiver.name}@{self.p("device")}'
+        fix = self.processor.fix_msg
+
+        values = [
+            ('receiver', self.receiver.name),
+            ('serial connected', str(self.link.is_open)),
+            ('serial bytes read', str(self.link.bytes_read)),
+            ('fix status', str(fix.status.status)),
+            ('solution', GGA_SOLUTION_NAMES.get(self.processor.gga_quality, 'unknown')),
+            ('satellites used', str(self.processor.num_satellites)),
+            ('hdop', f'{self.processor.hdop:.2f}'),
+            ('rtcm out bytes/s', f'{out.rate_bps:.0f}'),
+            ('rtcm out messages', ' '.join(f'{k}:{v}' for k, v in sorted(out.message_counts.items()))),
+        ]
+        if self.router.base_station:
+            sid, lat, lon, h = self.router.base_station
+            values.append(('base station', f'id {sid}: {lat:.8f}, {lon:.8f}, {h:.3f} m'))
+        for sink in self.router.sinks:
+            values.append((sink.name, sink.status()))
+
+        st.level, st.message = DiagnosticStatus.OK, 'ok'
+        if not self.link.is_open:
+            st.level, st.message = DiagnosticStatus.ERROR, 'receiver not connected'
+        elif fix.status.status == NavSatStatus.STATUS_NO_FIX:
+            st.level, st.message = DiagnosticStatus.WARN, 'no fix'
+        elif out.age() is None or out.age() > timeout:
+            st.level, st.message = DiagnosticStatus.WARN, 'no RTCM from receiver (survey-in running?)'
+        st.values = [KeyValue(key=k, value=v) for k, v in values]
+
+        arr = DiagnosticArray()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        arr.status = [st]
+        self.diag_pub.publish(arr)
+
+    # ============================================================== shutdown
+    def close(self):
+        self.link.stop()
+        self.router.stop()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = RtkBase()
+    try:
+        node.get_logger().info('RTK base - start node ...')
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # SIGINT (Ctrl-C) or SIGTERM (systemctl stop, launch)
+        pass
+    finally:
+        # Under launch the node receives the stop signal twice; a repeated
+        # signal must not interrupt the cleanup.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        node.close()
+        node.get_logger().info('RTK base - everything is shutdown now!')
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,11 @@
+--device=/dev/ttyACM0
+--baud=115200
+--output=tcpserver://0.0.0.0:2101
+--output=udp://192.168.1.255:2101
+--status-period=60
+# UM982: configure base mode on every connect (omit these for a receiver set up with its own tools)
+#--receiver=unicore
+#--survey-s=120
+#--fixed-position=41.49126464 -71.42186016 -14.11
+#--rtcm-message=1006:10
+#--rtcm-message=1074:1
