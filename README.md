@@ -191,13 +191,13 @@ Arguments can be kept in a file, one option per line (see `config/relay.conf.exa
 starting with `#` and blank lines are skipped. `--name=value` keeps the whole value, spaces
 included; `--name v1 v2 v3` gives several values, for example `--fixed-position LAT LON ALT`.
 ```bash
-python3 -m rtk_base.tools.relay @$HOME/rtk/relay.conf
+python3 -m rtk_base.tools.relay @site/relay.conf
 ```
 
 The relay prints a status line every `--status-period` seconds (serial state, RTCM rate, message
 types, output state, base position from RTCM 1005/1006) and warns when no RTCM arrives for
-`--no-rtcm-warning-s` seconds. `systemd/rtk_base_relay.service` starts it at boot; edit the user
-and paths in the file before installing it. In a ROS workspace the same tool is available as
+`--no-rtcm-warning-s` seconds. `systemd/rtk_base_relay.service` starts it at boot, installed from
+`site/` like the node service (see Station files). In a ROS workspace the same tool is available as
 `ros2 run rtk_base rtk_base_relay`.
 
 | Option | Default | Description |
@@ -222,18 +222,39 @@ Ubuntu Server 24.04 with ROS 2 Jazzy, for example a Raspberry Pi in the station.
 antenna is outside; only the coaxial cable enters the station. Site specific values (addresses,
 user, domain ID, base coordinates) are kept in the station log book.
 
+### Station files
+The station's own files are kept in `site/` in the repository folder. Git ignores `site/`, so
+`git pull` does not change them and they are never committed. Start from the examples:
+```bash
+cd ~/ros2_ws/src/rtk_base
+mkdir -p site
+cp config/base_generic.yaml site/base.yaml                       # node parameters
+cp systemd/rtk_base.service site/                                # node service
+cp config/gpsd.example site/gpsd                                 # /etc/default/gpsd
+cp config/chrony-rtk_base.conf.example site/chrony-rtk_base.conf  # chrony drop-in
+cp config/relay.conf.example site/relay.conf                     # only when using the relay
+```
+| File | Used as |
+|---|---|
+| `site/base.yaml` | Node parameters (`params_file`) |
+| `site/rtk_base.service` | Node service, linked into systemd |
+| `site/relay.conf` | Relay arguments, when the relay is used instead of the node |
+| `site/gpsd` | Copied to `/etc/default/gpsd` |
+| `site/chrony-rtk_base.conf` | Copied to `/etc/chrony/conf.d/rtk_base.conf`; chrony only reads its configuration from `/etc` |
+
+After changing `site/gpsd` or `site/chrony-rtk_base.conf`, copy it to `/etc` again. `git clean -x`
+deletes `site/`.
+
 ### Start at boot
 `systemd/rtk_base.service` runs `ros2 launch rtk_base start.launch.py` at boot and restarts it if it
-stops. Copy the parameter file out of the workspace first, for example
-`config/base_generic.yaml` to `~/rtk_base/base.yaml`, and use the receiver's
-`/dev/serial/by-id/` name as `device`. Edit the user, `ROS_DOMAIN_ID`, the namespace and the
-paths in the service file, then:
+stops. In `site/base.yaml` use the receiver's `/dev/serial/by-id/` name as `device`. In
+`site/rtk_base.service` set the user, `ROS_DOMAIN_ID`, the namespace and the paths, then link it
+into systemd and start it:
 ```bash
-sudo cp systemd/rtk_base.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now rtk_base
+sudo systemctl enable --now ~/ros2_ws/src/rtk_base/site/rtk_base.service
 journalctl -u rtk_base -f
 ```
+After editing `site/rtk_base.service`, run `sudo systemctl daemon-reload` and restart it.
 Use either this service or the relay service, not both: only one program can read the receiver
 port.
 
@@ -243,12 +264,18 @@ it to the vehicles over NTP. This works without internet.
 ```bash
 sudo apt install --no-install-recommends gpsd gpsd-tools chrony
 ```
-1. gpsd: copy `config/gpsd.example` to `/etc/default/gpsd` and set the UDP port.
+1. gpsd: set the UDP port in `site/gpsd` and copy it to `/etc/default/gpsd`.
    `USBAUTO="false"` stops gpsd from opening the receiver port itself.
 2. Node parameters: `use_gpsd_udp: true` and `virtual_port` set to the same port.
-3. chrony: copy `config/chrony-rtk_base.conf.example` to `/etc/chrony/conf.d/rtk_base.conf` and set
-   the network that may query the time (`allow`).
-4. `sudo systemctl restart gpsd chrony`, then check:
+3. chrony: set the network that may query the time (`allow`) in `site/chrony-rtk_base.conf` and
+   copy it to `/etc/chrony/conf.d/rtk_base.conf`.
+4. Start gpsd at boot (Ubuntu only starts it when a client connects, so chrony would get no time
+   after a reboot) and restart both:
+```bash
+sudo systemctl enable --now gpsd
+sudo systemctl restart gpsd chrony
+```
+   Then check:
 ```bash
 gpsmon                   # gpsd receives the NMEA and has a fix
 chronyc sources -v       # GPS line: '*' = the source chrony follows, reach 377 = all recent samples

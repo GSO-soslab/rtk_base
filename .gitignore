@@ -262,3 +262,7 @@ tags
 docs/_build
 
 # End of https://www.toptal.com/developers/gitignore/api/clion,ros,pycharm,visualstudiocode,linux,vim,cmake,macos
+
+# Station specific files (parameters, service, gpsd and chrony settings) kept in
+# the clone but never committed, see README "Station files"
+site/

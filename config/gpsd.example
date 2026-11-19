@@ -1,4 +1,4 @@
-# /etc/default/gpsd on the base station computer.
+# /etc/default/gpsd on the base station computer (kept as site/gpsd, README).
 #
 # rtk_base_node forwards the receiver's NMEA to gpsd over UDP; set in the node's
 # parameter file:

@@ -4,7 +4,7 @@ without ROS.
     python3 -m rtk_base.tools.relay --device /dev/ttyACM0 --baud 115200 \\
         --output tcpserver://0.0.0.0:2101 --output udp://<broadcast_address>:2101
 
-    python3 -m rtk_base.tools.relay @/home/user/rtk/relay.conf
+    python3 -m rtk_base.tools.relay @site/relay.conf
 
 Uses the same serial link, framer and RTCM outputs as the ROS node.  Complete
 RTCM frames with a valid CRC are forwarded; NMEA and other text is discarded.
